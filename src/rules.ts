@@ -9,8 +9,8 @@ export const HANDLE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 export const APPROVAL_ID = /^[A-Z2-7]{10}$/;
 const AMOUNT = /^(0|[1-9][0-9]{0,8})(\.[0-9]{1,2})?$/;
 const CURRENCY = /^[A-Z]{3}$/;
-/** 13 or more digits, each pair split by at most two spaces, dots, dashes or underscores. */
-const DIGIT_RUN = /[0-9](?:[ ._-]{0,2}[0-9]){12,}/g;
+/** 13 or more digits, each pair split by at most two spaces, dots, dashes, underscores, pluses or commas. */
+const DIGIT_RUN = /[0-9](?:[ ._+,-]{0,2}[0-9]){12,}/g;
 
 /** The Luhn checksum that every card number passes (and a random digit string passes one time in ten). */
 function luhn(digits: string): boolean {
@@ -32,15 +32,13 @@ function luhn(digits: string): boolean {
  * spell the digits out), which is why the agent should never see a card at all.
  */
 export function hasCardNumber(text: string): boolean {
-  const forms = new Set([text.normalize('NFKC')]);
-  try {
-    forms.add(decodeURIComponent(text).normalize('NFKC'));
-  } catch {
-    // not %-encoded text
-  }
+  // Each %XX is decoded on its own, so one stray % elsewhere cannot stop the decoding (as it would
+  // decodeURIComponent's). Byte by byte is enough: digits and separators are ASCII.
+  const decoded = text.replace(/%([0-9a-f]{2})/gi, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+  const forms = new Set([text.normalize('NFKC'), decoded.normalize('NFKC')]);
   for (const form of forms) {
     for (const [run] of form.matchAll(DIGIT_RUN)) {
-      const digits = run.replace(/[ ._-]/g, '');
+      const digits = run.replace(/[ ._+,-]/g, '');
       for (let start = 0; start + 13 <= digits.length; start++) {
         for (let len = 13; len <= 19 && start + len <= digits.length; len++) {
           if (luhn(digits.slice(start, start + len))) return true;
@@ -67,10 +65,17 @@ export function isSafeHttpsUrl(value: string): boolean {
   } catch {
     return false;
   }
-  return url.protocol === 'https:' && url.username === '' && url.password === '' && url.hostname !== '';
+  const ok = url.protocol === 'https:' && url.username === '' && url.password === '' && url.hostname !== '';
+  // The URL as stored and shown (below) is the resolved one: it obeys the same limits.
+  return ok && url.href.length <= 2000 && !hasCardNumber(url.href);
 }
 
-const httpsUrl = z.string().refine(isSafeHttpsUrl, 'must be an https URL without credentials');
+/**
+ * An ask's URL is stored, shown and passed on as the browser resolves it (`href`), never as the agent wrote
+ * it: `https://shop.example\@evil.com` is shown as `https://shop.example/@evil.com` with site `shop.example`,
+ * and a payment step that parsed the raw text another way could have read the host as `evil.com`.
+ */
+const httpsUrl = z.string().refine(isSafeHttpsUrl, 'must be an https URL without credentials').transform((s) => new URL(s).href);
 
 export const payFields = {
   merchant: text(120).min(1),

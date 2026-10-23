@@ -25,22 +25,23 @@ This project makes the agent's side **powerless by construction** instead:
 | property | how it is enforced |
 |---|---|
 | It can only ask. | The client has three methods: ask to pay, ask to create an account, read a status. There is no approve, cancel or execute method, and the approver has no HTTP endpoint for one. Approval happens only on the approver's own console. |
-| Nothing secret comes back. | Every answer from the approver is parsed against a strict schema. An extra field (a recap, a card, a token) fails the parse, and the agent gets an error code instead of the data. |
-| What the person approves is what is recorded. | The approver renders the recap from the ask it stored. An ask cannot be changed after it was made, and a decision is final. |
+| Nothing secret comes back. | Every answer from the approver is parsed against a strict schema. An extra field (a recap, a card, a token) fails the parse, and the agent gets an error code instead of the data. The two short codes it may pass on (`ref`, `error_code`) are at most 64 letters, digits, `-` and `_`, and never a card number. |
+| What the person approves is what is recorded. | The approver renders the recap from the ask it stored. URLs are stored as the browser resolves them, so the URL shown is the URL passed on. An ask cannot be changed after it was made, and a decision is final. |
 | It cannot replay an ask. | The server mints the request id, never the agent. The approver refuses an id it has seen. |
 | Errors are codes. | A failure returns `{"error": "CODE"}`: never a message, URL or response body that could carry something the agent should not see. |
 | No secrets in arguments. | A card is a handle (`card-2`), an identity a handle (`work`). A field that holds a card number (13–19 digits passing Luhn, even inside a longer number or split by spaces or dots) is refused. |
-| No silent fallback. | mTLS is required, and there is no switch to turn it off. Missing or unreadable configuration stops the server before it serves anything. |
+| No silent fallback. | mTLS is required, and there is no switch to turn it off. Missing, unreadable or invalid certificates stop the server before it serves anything. |
 
 The recap also defends the person against text the agent wrote:
 
-- **No fake recaps.** The approver cuts every line to 76 columns itself and marks each further line with
+- **No fake recaps.** The approver cuts every line to 76 terminal columns itself (counting any character
+  that is not plain ASCII as two columns, as wide as CJK or emoji get) and marks each further line with
   `>`, so a fake `[ask …]` block hidden in a long reason can never begin a line. A decision is answered
   with what was decided (`approved: PAY 19.00 EUR at shop.example`), from the stored ask.
-- **No hidden characters.** Control, bidi, zero-width, tag and other invisible characters are shown as
-  `\u{…}` escapes, and runs of spaces become one.
+- **No hidden characters.** Control, bidi, zero-width, tag and other invisible characters, and stacks of
+  combining marks, are shown as `\u{…}` escapes, and runs of spaces become one.
 - **No look-alike sites.** The site is shown in punycode, so `shop.exаmple` with a Cyrillic `а` shows as
-  `xn--…`.
+  `xn--…`. A host too long for one line is shown by its end (`....evil.com`), which names who owns it.
 
 ## Quick start (from a clone)
 

@@ -52,7 +52,7 @@ describe('ApproverClient (SPEC.md §2.1, §2.2)', () => {
   });
 
   it('refuses a status with a long or odd reference, which could carry data', async () => {
-    for (const ref of ['x'.repeat(65), 'has space', 'card:4111']) {
+    for (const ref of ['x'.repeat(65), 'has space', 'card:4111', '4111111111111111', 'demo-4111-1111-1111-1111']) {
       expect(await code(new ApproverClient(fakeTransport(json(200, { approval_id: ID, state: 'approved', ref }))).status(ID))).toBe('APPROVER_RESPONSE_REJECTED');
     }
   });

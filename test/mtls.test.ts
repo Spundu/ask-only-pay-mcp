@@ -1,7 +1,8 @@
 // The approver's HTTP API over real mTLS, with the certificates from scripts/certs.mjs (SPEC.md §6, §8).
 
 import https from 'node:https';
-import type { AddressInfo } from 'node:net';
+import net from 'node:net';
+
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApproverServer } from '../src/approver/http.js';
 import { Store, type Ask } from '../src/approver/store.js';
@@ -19,7 +20,7 @@ beforeAll(async () => {
   server = createApproverServer({ cert: certFile('good', 'approver.pem'), key: certFile('good', 'approver.key'), ca: certFile('good', 'client-ca.pem') }, store, (ask) => seen.push(ask));
   server.on('tlsClientError', () => {});
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  port = (server.address() as AddressInfo).port;
+  port = (server.address() as net.AddressInfo).port;
 });
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
@@ -138,6 +139,38 @@ describe('the approver API (SPEC.md §6)', () => {
     });
     expect([413, -1]).toContain(result.status);
     expect(result.sentAfter).toBeLessThan(64 * 1024 * 1024);
+  });
+
+  it('closes connections from one address past 8 at once, before any handshake', async () => {
+    const sockets = Array.from({ length: 12 }, () => net.connect(port, '127.0.0.1'));
+    const closed = await Promise.all(
+      sockets.map((s) => new Promise<boolean>((resolve) => {
+        s.on('error', () => {});
+        s.once('close', () => resolve(true));
+        setTimeout(() => resolve(false), 1000);
+      })),
+    );
+    expect(closed.filter(Boolean)).toHaveLength(4);
+    for (const s of sockets) s.destroy();
+    // Once they are gone, the same address is served again.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await raw(good)).toBe(404);
+  });
+
+  it.runIf(process.platform === 'linux')('keeps serving the real client while another address floods it', async () => {
+    const flood = Array.from({ length: 30 }, () => net.connect({ port, host: '127.0.0.1', localAddress: '127.0.0.2' }).on('error', () => {}));
+    await new Promise((r) => setTimeout(r, 200));
+    try {
+      expect(await raw(good)).toBe(404);
+    } finally {
+      for (const s of flood) s.destroy();
+    }
+  });
+
+  it('stores what it shows: the URL as the browser resolves it', async () => {
+    const ack = await goodClient().requestPay({ ...FIELDS, checkout_url: 'https://shop.example\\@evil.com' }, crypto.randomUUID());
+    const ask = store.get(ack.approval_id);
+    expect(ask?.body.kind === 'pay' && ask.body.fields.checkout_url).toBe('https://shop.example/@evil.com');
   });
 
   it('has no way to approve, cancel or change an ask over HTTP', async () => {

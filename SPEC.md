@@ -39,8 +39,8 @@ Each rule is a property of the code, not a promise.
    never by a number or an address. Handles match `^[a-z0-9][a-z0-9_-]{0,31}$`, so an email address cannot
    pass. Every field (handles, `merchant`, `reason`, URLs) is refused if it holds a card number: 13 to 19
    digits in a row that pass the Luhn checksum, also inside a longer run of digits, with up to two spaces,
-   dots, dashes or underscores between digits, after full-width digits are read as digits and (for any
-   field) %-escapes are decoded. A random 13-digit window passes Luhn one time in ten, so a long digit run
+   dots, dashes, underscores, pluses or commas between digits, after full-width digits are read as digits
+   and (for any field) each `%XX` escape is decoded. A random 13-digit window passes Luhn one time in ten, so a long digit run
    is refused almost always; 12 digits or fewer are always allowed. This catches a card pasted by mistake.
    It is no defence against an agent set on hiding one (it could spell the digits out): the real defence is
    that the agent never sees a card at all.
@@ -59,7 +59,9 @@ One tool. Arguments are an object with `verb` and the fields for that verb. Unkn
 | `account_create` | `provider_url` (an `https:` URL, at most 2,000 chars), `identity_handle` (optional handle, default `primary`), `reason` (optional, at most 500 chars) | same as `pay` |
 | `status` | `approval_id` (`^[A-Z2-7]{10}$`) | `{approval_id, state, ref?, error_code?}` |
 
-- URLs must be `https:` with a host and no user name or password.
+- URLs must be `https:` with a host and no user name or password. A URL is stored, shown and passed on as
+  the browser resolves it (its `href`), never as the agent wrote it: `https://shop.example\@evil.com` is
+  `https://shop.example/@evil.com`, site `shop.example`, everywhere. The limits apply to both forms.
 - `expires_at` is Unix time in seconds. A pending ask expires 10 minutes after it was made.
 - `state` is one of `pending`, `approved`, `denied`, `expired`.
 - `ref` is set only when `state` is `approved` (the reference approver writes `demo-` and 8 hex digits).
@@ -121,11 +123,15 @@ The certificates last 30 days.
 | `GET /v1/result/{approval_id}` | | 200 `{approval_id, state, ref?, error_code?}` |
 
 Errors: 400 `{"error":"invalid_request"}`, 404 `{"error":"not_found"}`, 409 `{"error":"duplicate_request"}`
-(a `request_id` seen before), 413 for a body over 16 KiB, 429 `{"error":"too_many_pending"}`. The approver
+(a `request_id` seen before), 413 `{"error":"too_large"}` for a body over 16 KiB, 429
+`{"error":"too_many_pending"}`, and 500 `{"error":"internal"}` for a bug. (401 `{"error":"unauthorized"}`
+is a second lock: a client without a valid certificate never gets past the handshake.) The approver
 validates every field by the same rules as §3 itself: it never trusts the MCP server's checks.
 
 Limits: a body declared or found to be over 16 KiB gets 413 at once and the connection is closed (the rest is
-never read); a TLS handshake must finish within 5 s; at most 64 connections at once. The approver keeps the
+never read); a TLS handshake must finish within 5 s; at most 8 connections at once from one address
+(counted from the first byte, before any certificate), so a host elsewhere cannot crowd out the real
+client, and at most 1,024 in all. The approver keeps the
 1,000 most recent asks (pending asks are never dropped) and the request ids of those it keeps: a request id
 is refused while its ask is kept.
 
@@ -149,14 +155,19 @@ with what was decided, from the stored ask: `K7Q2M4XZ3A: approved: PAY 19.00 EUR
 
 Rules for the recap, so text from the agent cannot forge or blur it:
 
-- Every line is at most 76 columns, so the terminal never wraps one by itself. A longer value is cut by the
-  approver, and each further line starts with `           > `. So only the approver's own lines start with
-  `[ask` or a label: a fake recap inside a reason or a merchant name cannot begin a line.
+- Every line is at most 76 terminal columns, so the terminal never wraps one by itself. Columns are counted
+  on the safe side: printable ASCII is 1, every other character 2 (the most a terminal gives one; CJK and
+  emoji take 2). A longer value is cut by the approver, and each further line starts with `           > `.
+  So only the approver's own lines start with `[ask` or a label: a fake recap inside a reason or a merchant
+  name cannot begin a line.
 - Runs of spaces become one. Shown as `\u{…}` escapes: control characters, format characters (bidi
   overrides, zero-width and tag characters), line and paragraph separators, private-use and unassigned code
-  points, variation selectors, blank fillers (Hangul, braille) and every space but the plain one.
-- URLs are shown as the browser resolves them; the `site` line shows the host in punycode, so a look-alike
-  domain (`shop.exаmple` with a Cyrillic а) shows as `xn--…`.
+  points, variation selectors, blank fillers (Hangul, braille), every space but the plain one, and every
+  combining mark after the first on a character (a stack of marks can be drawn over the lines around it).
+- URLs are shown as stored (§3); the `site` line shows the host in punycode, so a look-alike domain
+  (`shop.exаmple` with a Cyrillic а) shows as `xn--…`. A host too long for one line is shown by its end,
+  which names who owns the site, after `...`: the `site` line and the decision both read
+  `....evil.com`, never `shop.example.aaa…` with the owner cut off.
 - An approval is final: there is no way to change an ask after it was made, so what the person approved is
   exactly what is recorded.
 
@@ -172,13 +183,16 @@ Rules for the recap, so text from the agent cannot forge or blur it:
   refused; there is no variable that turns mTLS off. The same for the approver, and a bad port or host.
 - Store: a request id is used once; at most 50 pending; an ask expires after 10 minutes (with a test clock);
   a decision is final; at most 1,000 asks are kept, never a pending one.
-- Recap: a fake recap in a long reason or merchant, padded to any wrap point, cannot begin a line; every
-  line fits 76 columns; the characters above are escaped; a look-alike domain shows in punycode.
-- Card numbers: found inside longer runs, behind dots, double spaces, underscores, full-width digits and
-  %-escapes.
+- Recap: a fake recap in a long reason or merchant, padded to any wrap point and written in ASCII, CJK,
+  emoji or full-width letters, cannot begin a row on an 80- or 77-column terminal (simulated with real
+  widths); the characters above are escaped; a look-alike domain shows in punycode; a long host keeps its end.
+- Card numbers: found inside longer runs, behind dots, double spaces, underscores, pluses, commas,
+  full-width digits, %-escapes and a stray `%`; refused in the approver's `ref` and `error_code` too.
+- URLs: stored as resolved, so the approver keeps `https://shop.example/@evil.com`, not the raw text.
 - Transport: an approver that drips bytes is cut off at the deadline; a reply over 64 KiB is refused.
 - Approver limits: a body declared too large gets 413 without the approver waiting for it; a body sent
-  too large stops being read.
+  too large stops being read; the 9th connection from one address is closed before any handshake, and
+  (on Linux, where a second loopback address exists) a flood from one address does not stop the real client.
 - Docs: SPEC.md is whole, its error codes are the tool's, and every environment variable named in the
   README and here exists in the code.
 - mTLS: the approver refuses a client with no certificate and one signed by another CA; the MCP server

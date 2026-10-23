@@ -3,6 +3,7 @@
 
 import https from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { Socket } from 'node:net';
 import { z } from 'zod';
 import { APPROVAL_ID, accountFields, payFields } from '../rules.js';
 import type { Ask, AskBody, Store } from './store.js';
@@ -15,8 +16,13 @@ export interface ApproverTls {
 }
 
 const MAX_BODY_BYTES = 16 * 1024;
-/** Far above what one MCP server needs; a cap so idle connections cannot pile up. */
-const MAX_CONNECTIONS = 64;
+/**
+ * Open connections from one address, counted from the first TCP byte (before any certificate is shown).
+ * One MCP server needs one at a time; a host elsewhere that opens many cannot crowd out the real client.
+ */
+const MAX_PER_ADDRESS = 8;
+/** All open connections: a cap so idle ones from many addresses cannot pile up. */
+const MAX_CONNECTIONS = 1024;
 const requestId = z.string().uuid();
 // The approver checks every field itself: it never trusts the MCP server's checks.
 const PayBody = z.strictObject({ ...payFields, request_id: requestId });
@@ -34,6 +40,21 @@ export function createApproverServer(tls: ApproverTls, store: Store, onAsk: (ask
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   server.maxConnections = MAX_CONNECTIONS;
+  const open = new Map<string, number>();
+  server.on('connection', (socket: Socket) => {
+    const address = socket.remoteAddress ?? 'unknown';
+    const count = (open.get(address) ?? 0) + 1;
+    if (count > MAX_PER_ADDRESS) {
+      socket.destroy();
+      return;
+    }
+    open.set(address, count);
+    socket.once('close', () => {
+      const left = (open.get(address) ?? 1) - 1;
+      if (left > 0) open.set(address, left);
+      else open.delete(address);
+    });
+  });
   return server;
 }
 

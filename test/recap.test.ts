@@ -1,7 +1,7 @@
 // The recap cannot be forged or blurred by text from the agent (SPEC.md §7).
 
 import { describe, expect, it } from 'vitest';
-import { MAX_LINE, recap, safe } from '../src/approver/recap.js';
+import { MAX_LINE, recap, safe, summary } from '../src/approver/recap.js';
 import { Store, type AskBody } from '../src/approver/store.js';
 
 const PAY = { merchant: 'Corner Coffee', amount: '3.50', currency: 'GBP', card_handle: 'card-2', checkout_url: 'https://coffee.example/c' };
@@ -31,8 +31,54 @@ describe('a forged recap inside agent text', () => {
     expect(lines.at(-1)).toMatch(/^ {2}approve [A-Z2-7]{10} {3}or {3}deny [A-Z2-7]{10}$/);
   });
 
+  /** How a real terminal lays text out: CJK and emoji take 2 columns, combining marks 0, the rest 1. */
+  function screenRows(text: string, width = 80): string[] {
+    const wide = /[\u{1100}-\u{115f}\u{2e80}-\u{a4cf}\u{ac00}-\u{d7a3}\u{f900}-\u{faff}\u{fe30}-\u{fe4f}\u{ff00}-\u{ff60}\u{ffe0}-\u{ffe6}\u{1f000}-\u{1faff}\u{20000}-\u{3fffd}]/u;
+    const rows: string[] = [];
+    for (const line of text.split('\n')) {
+      let row = '';
+      let used = 0;
+      for (const c of line) {
+        const w = /\p{M}/u.test(c) ? 0 : wide.test(c) ? 2 : 1;
+        if (used + w > width) {
+          rows.push(row);
+          row = '';
+          used = 0;
+        }
+        row += c;
+        used += w;
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  // Round 2: 76 CHARACTERS of 東 are 152 columns, so the terminal wrapped them and text after the wrap
+  // point began a line of its own.
+  it.each([
+    ['CJK', `${'f'.repeat(35)}${`${'東'.repeat(33)}x${forged}`.repeat(4)}`.slice(0, 500)],
+    ['emoji', `${`${String.fromCodePoint(0x1f600).repeat(33)}x${forged}`.repeat(4)}`.slice(0, 500)],
+    ['full-width', `${'Ａ'.repeat(40)}${forged}${'Ａ'.repeat(40)}${forged}`],
+  ])('cannot start a screen row with wide characters (%s) on an 80- or 77-column terminal', (_kind, reason) => {
+    const text = recap(ask({ reason, merchant: `${'東'.repeat(60)}${forged}`.slice(0, 120) }), 0);
+    for (const width of [80, 77]) {
+      const rows = screenRows(text, width);
+      expect(rows.length).toBe(text.split('\n').length); // nothing wrapped
+      expect(rows.filter((r) => r.startsWith('[ask'))).toHaveLength(1);
+    }
+  });
+
   it('collapses runs of spaces in agent text', () => {
     expect(recap(ask({ merchant: `Big${' '.repeat(60)}Shop` }), 0)).toContain('  to:        Big Shop\n');
+  });
+
+  it('keeps the end of a long host, which names who owns the site, in the site line and the decision', () => {
+    const host = `shop.example.${'a'.repeat(50)}.evil.com`;
+    const a = ask({ checkout_url: `https://${host}/c`, amount: '999.00' });
+    const text = recap(a, 0);
+    expect(text).toMatch(/\n {2}site: {6}\.{3}[a.]+\.evil\.com\n/);
+    expect(summary(a)).toMatch(/^PAY 999\.00 GBP at \.{3}[a.]+\.evil\.com$/);
+    expect([...summary(a)].length).toBeLessThanOrEqual(MAX_LINE - 13);
   });
 
   it('wraps a long checkout URL itself, with the continuation mark', () => {
@@ -65,6 +111,14 @@ describe('characters that could hide or reorder text', () => {
     [0x378, 'unassigned'],
   ])('escapes U+%s (%s)', (cp) => {
     expect(safe(`19${String.fromCodePoint(cp)}00`)).toBe(`19\\u{${cp.toString(16)}}00`);
+  });
+
+  it('keeps one combining mark on a character and escapes a stack of them', () => {
+    const acute = String.fromCodePoint(0x301);
+    const grave = String.fromCodePoint(0x300);
+    expect(safe(`e${acute}`)).toBe('é'); // composed
+    expect(safe(`q${acute}`)).toBe(`q${acute}`);
+    expect(safe(`q${acute}${grave}${acute}`)).toBe(`q${acute}\\u{300}\\u{301}`);
   });
 
   it('leaves ordinary text alone', () => {

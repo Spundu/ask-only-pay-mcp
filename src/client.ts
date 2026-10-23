@@ -2,7 +2,7 @@
 // approve, cancel or execute method here, and the approver has no endpoint for one either.
 
 import { z } from 'zod';
-import { APPROVAL_ID, STATES, type AccountFields, type PayFields } from './rules.js';
+import { APPROVAL_ID, STATES, hasCardNumber, type AccountFields, type PayFields } from './rules.js';
 
 /** One HTTP answer, as raw text: the client decides what it means. */
 export interface Reply {
@@ -38,9 +38,14 @@ const AckSchema = z.strictObject({
   expires_at: z.number().int().nonnegative(),
 });
 
-// Short codes only, so a "reference" cannot carry anything of use. `.nullish()`, not `.optional()`: a server
-// may write an empty optional as an explicit null, and `.optional()` refuses null.
-const shortCode = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).nullish().transform((v) => v ?? undefined);
+// Short codes only: at most 64 letters, digits, - and _, and never a card number. `.nullish()`, not
+// `.optional()`: a server may write an empty optional as an explicit null, and `.optional()` refuses null.
+const shortCode = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{1,64}$/)
+  .refine((s) => !hasCardNumber(s))
+  .nullish()
+  .transform((v) => v ?? undefined);
 const ResultSchema = z.strictObject({
   approval_id: z.string().regex(APPROVAL_ID),
   state: z.enum(STATES),

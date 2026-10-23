@@ -61,9 +61,19 @@ describe('pay fields (SPEC.md §3)', () => {
     expect(hasCardNumber(text)).toBe(true);
   });
 
-  it('finds a card in a URL, also behind %-escapes', () => {
+  it('finds a card in a URL, also behind %-escapes, pluses, and a stray %', () => {
     expect(isSafeHttpsUrl('https://shop.example/pay?n=9-4111-1111-1111-1111')).toBe(false);
     expect(isSafeHttpsUrl('https://shop.example/pay?n=4111%201111%201111%201111')).toBe(false);
+    expect(isSafeHttpsUrl('https://shop.example/pay?card=4111+1111+1111+1111')).toBe(false);
+    expect(isSafeHttpsUrl('https://shop.example/p?c=4111%201111%201111%201111&q=100%')).toBe(false);
+    expect(hasCardNumber('4111,1111,1111,1111')).toBe(true);
+  });
+
+  it('stores a URL as the browser resolves it, so what is shown is what is passed on', () => {
+    const parsed = Pay.parse({ ...pay, checkout_url: 'https://shop.example\\@evil.com' });
+    expect(parsed.checkout_url).toBe('https://shop.example/@evil.com');
+    expect(Pay.parse({ ...pay, checkout_url: 'https://SHOP.example' }).checkout_url).toBe('https://shop.example/');
+    expect(Pay.parse({ ...pay, checkout_url: `https://shop.ex${String.fromCodePoint(0x430)}mple/c` }).checkout_url).toMatch(/^https:\/\/shop\.xn--/);
   });
 
   it('refuses a merchant that is empty or too long, and a reason that is too long', () => {
