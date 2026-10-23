@@ -83,11 +83,11 @@ describe('end to end', () => {
     const id = asked.value.approval_id as string;
 
     // The recap is on the approver's console, and only there.
-    await waitFor(new RegExp(`\\[ask ${id}\\] PAY 19\\.00 EUR[\\s\\S]*agent's reason \\(unchecked\\): renew the domain`), mark);
+    await waitFor(new RegExp(`\\[ask ${id}\\] PAY 19\\.00 EUR[\\s\\S]*reason: {4}\\(from the agent, unchecked\\) renew the domain`), mark);
     expect(await call({ verb: 'status', approval_id: id })).toEqual({ value: { approval_id: id, state: 'pending' }, isError: false });
 
     approver.stdin.write(`approve ${id}\n`);
-    await waitFor(new RegExp(`${id}: approved`), mark);
+    await waitFor(new RegExp(`${id}: approved: PAY 19\\.00 EUR at shop\\.example`), mark);
     const status = await call({ verb: 'status', approval_id: id });
     expect(status.value).toMatchObject({ approval_id: id, state: 'approved', ref: expect.stringMatching(/^demo-[0-9a-f]{8}$/) });
   });
@@ -98,7 +98,7 @@ describe('end to end', () => {
     const id = asked.value.approval_id as string;
     await waitFor(new RegExp(`\\[ask ${id}\\] CREATE AN ACCOUNT[\\s\\S]*identity:  work`), mark);
     approver.stdin.write(`deny ${id}\n`);
-    await waitFor(new RegExp(`${id}: denied`), mark);
+    await waitFor(new RegExp(`${id}: denied: CREATE AN ACCOUNT at service\\.example`), mark);
     expect((await call({ verb: 'status', approval_id: id })).value).toEqual({ approval_id: id, state: 'denied' });
   });
 
@@ -130,5 +130,26 @@ describe('start-up', () => {
     const r = spawnSync(process.execPath, [APPROVER], { env: getDefaultEnvironment(), input: '', encoding: 'utf8' });
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('refusing to start: ASK_ONLY_PAY_APPROVER_CERT is not set');
+  });
+
+  const approverEnv = (change: Record<string, string>) => ({
+    ...getDefaultEnvironment(),
+    ASK_ONLY_PAY_APPROVER_CERT: certPath('good', 'approver.pem'),
+    ASK_ONLY_PAY_APPROVER_KEY: certPath('good', 'approver.key'),
+    ASK_ONLY_PAY_APPROVER_CA: certPath('good', 'client-ca.pem'),
+    ...change,
+  });
+
+  it.each([
+    [{ ASK_ONLY_PAY_APPROVER_KEY: certPath('other', 'approver.key') }, 'the key does not belong'],
+    [{ ASK_ONLY_PAY_APPROVER_CA: certPath('good', 'client.pem') }, 'not a CA'],
+    [{ ASK_ONLY_PAY_APPROVER_PORT: '99999' }, 'must be a port number'],
+    [{ ASK_ONLY_PAY_APPROVER_PORT: 'http' }, 'must be a port number'],
+    [{ ASK_ONLY_PAY_APPROVER_HOST: '256.0.0.1' }, 'cannot listen'],
+  ])('the approver refuses to start on bad configuration %j: exit 2, no stack trace', (change, reason) => {
+    const r = spawnSync(process.execPath, [APPROVER], { env: approverEnv(change), input: '', encoding: 'utf8', timeout: 15_000 });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain(reason);
+    expect(r.stderr).not.toMatch(/\n\s+at /);
   });
 });

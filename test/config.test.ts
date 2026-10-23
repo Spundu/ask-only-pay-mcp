@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveConfig } from '../src/config.js';
@@ -38,6 +40,27 @@ describe('start-up configuration (SPEC.md §2.6, §5)', () => {
     const r = reason({ ...full(), ASK_ONLY_PAY_CLIENT_KEY: missing });
     expect(r).toBe('cannot read the file named by ASK_ONLY_PAY_CLIENT_KEY (ENOENT)');
     expect(r).not.toContain('secret-folder');
+  });
+
+  it('refuses readable files that are not valid TLS material, without printing them', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ask-only-pay-bad-'));
+    try {
+      const empty = path.join(dir, 'empty.pem');
+      writeFileSync(empty, '');
+      expect(reason({ ...full(), ASK_ONLY_PAY_CLIENT_KEY: empty })).toMatch(/^the certificate, key or CA is not valid PEM.*\(ERR_OSSL_/);
+      // A CA file of junk would silently trust nothing.
+      const junk = path.join(dir, 'junk.pem');
+      writeFileSync(junk, 'secret-looking junk');
+      const r = reason({ ...full(), ASK_ONLY_PAY_CA: junk });
+      expect(r).toMatch(/^the certificate, key or CA is not valid PEM/);
+      expect(r).not.toContain('secret-looking');
+      // A certificate that is not a CA.
+      expect(reason({ ...full(), ASK_ONLY_PAY_CA: certPath('good', 'approver.pem') })).toBe('the CA file holds a certificate that is not a CA');
+      // A key that does not belong to the certificate.
+      expect(reason({ ...full(), ASK_ONLY_PAY_CLIENT_KEY: certPath('other', 'client.key') })).toMatch(/^the certificate, key or CA is not valid PEM, or the key does not belong/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('has no switch to turn mTLS off', () => {

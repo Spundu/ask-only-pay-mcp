@@ -43,11 +43,27 @@ describe('pay fields (SPEC.md §3)', () => {
     },
   );
 
-  it('allows numbers that are not cards: short ones, ones failing Luhn, runs longer than a card', () => {
-    expect(payWith({ reason: 'order 12345 for 2026' })).toBe(true);
-    expect(hasCardNumber('4111111111111112')).toBe(false);
-    expect(hasCardNumber('order 41111111111111110000')).toBe(false);
-    expect(isSafeHttpsUrl('https://shop.example/checkout/4111111111111112')).toBe(true);
+  it('allows numbers that are not cards: short ones, and 13 digits failing Luhn', () => {
+    expect(payWith({ reason: 'order 12345 for 2026, ref 000123456789' })).toBe(true);
+    expect(hasCardNumber('1234567890123')).toBe(false);
+    expect(isSafeHttpsUrl('https://shop.example/checkout/1234567890123')).toBe(true);
+  });
+
+  it.each([
+    'order 12345 4111 1111 1111 1111',
+    'ref 9 4111111111111111',
+    'x 41111111111111110000',
+    '4111.1111.1111.1111',
+    '4111  1111  1111  1111',
+    '4111_1111_1111_1111',
+    `${String.fromCodePoint(0xff14)}111111111111111`,
+  ])('finds a card inside a longer run, behind other separators, or in full-width digits: %j', (text) => {
+    expect(hasCardNumber(text)).toBe(true);
+  });
+
+  it('finds a card in a URL, also behind %-escapes', () => {
+    expect(isSafeHttpsUrl('https://shop.example/pay?n=9-4111-1111-1111-1111')).toBe(false);
+    expect(isSafeHttpsUrl('https://shop.example/pay?n=4111%201111%201111%201111')).toBe(false);
   });
 
   it('refuses a merchant that is empty or too long, and a reason that is too long', () => {

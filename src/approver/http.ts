@@ -15,6 +15,8 @@ export interface ApproverTls {
 }
 
 const MAX_BODY_BYTES = 16 * 1024;
+/** Far above what one MCP server needs; a cap so idle connections cannot pile up. */
+const MAX_CONNECTIONS = 64;
 const requestId = z.string().uuid();
 // The approver checks every field itself: it never trusts the MCP server's checks.
 const PayBody = z.strictObject({ ...payFields, request_id: requestId });
@@ -23,13 +25,15 @@ const RESULT_PATH = /^\/v1\/result\/([^/]+)$/;
 
 export function createApproverServer(tls: ApproverTls, store: Store, onAsk: (ask: Ask) => void): https.Server {
   const server = https.createServer(
-    { cert: tls.cert, key: tls.key, ca: tls.ca, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.2' },
+    // A connection that never finishes its handshake is dropped after 5 s, not Node's default 120 s.
+    { cert: tls.cert, key: tls.key, ca: tls.ca, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.2', handshakeTimeout: 5_000 },
     (req, res) => {
       void route(req, res, store, onAsk).catch(() => send(res, 500, { error: 'internal' }));
     },
   );
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
+  server.maxConnections = MAX_CONNECTIONS;
   return server;
 }
 
@@ -40,7 +44,7 @@ async function route(req: IncomingMessage, res: ServerResponse, store: Store, on
 
   if (req.method === 'POST' && (path === '/v1/pay' || path === '/v1/account/create')) {
     const raw = await readBody(req);
-    if (raw === 'too_large') return send(res, 413, { error: 'too_large' });
+    if (raw === 'too_large') return tooLarge(res);
     let json: unknown;
     try {
       json = JSON.parse(raw);
@@ -68,19 +72,30 @@ async function route(req: IncomingMessage, res: ServerResponse, store: Store, on
   return send(res, 404, { error: 'not_found' });
 }
 
+/** The body, or 'too_large' as soon as it passes the limit: the rest is never read (SPEC.md §6). */
 function readBody(req: IncomingMessage): Promise<string | 'too_large'> {
+  const declared = Number(req.headers['content-length']);
+  if (declared > MAX_BODY_BYTES) return Promise.resolve('too_large');
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
-    let over = false;
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) over = true;
-      else chunks.push(chunk);
+      if (size > MAX_BODY_BYTES) {
+        req.pause();
+        resolve('too_large');
+      } else chunks.push(chunk);
     });
-    req.on('end', () => resolve(over ? 'too_large' : Buffer.concat(chunks).toString('utf8')));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
+}
+
+/** Answers 413 and closes the connection, so the client cannot keep sending. */
+function tooLarge(res: ServerResponse): void {
+  res.setHeader('connection', 'close');
+  send(res, 413, { error: 'too_large' });
+  res.on('finish', () => res.socket?.destroy());
 }
 
 function send(res: ServerResponse, status: number, body: object): void {

@@ -100,6 +100,46 @@ describe('the approver API (SPEC.md §6)', () => {
     expect(await raw({ ...good, method: 'POST', path: '/v1/pay', body: 'x'.repeat(17 * 1024) })).toBe(413);
   });
 
+  it('answers 413 to a body declared too large, without waiting for it', async () => {
+    const started = Date.now();
+    const status = await new Promise<number | string>((resolve) => {
+      const req = https.request(
+        { host: '127.0.0.1', port, servername: 'localhost', ca: certFile('good', 'approver-ca.pem'), ...good, method: 'POST', path: '/v1/pay', agent: false, headers: { 'content-length': String(300 * 1024 * 1024) } },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+          req.destroy();
+        },
+      );
+      req.on('error', (err: NodeJS.ErrnoException) => resolve(err.code ?? err.name));
+      req.write('{'); // and never the rest
+    });
+    expect(status).toBe(413);
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it('stops reading a body as soon as it passes 16 KiB, and closes the connection', async () => {
+    const result = await new Promise<{ status: number; sentAfter: number }>((resolve) => {
+      let sent = 0;
+      const req = https.request(
+        { host: '127.0.0.1', port, servername: 'localhost', ca: certFile('good', 'approver-ca.pem'), ...good, method: 'POST', path: '/v1/pay', agent: false },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, sentAfter: sent }));
+        },
+      );
+      req.on('error', () => resolve({ status: -1, sentAfter: sent }));
+      const chunk = Buffer.alloc(64 * 1024, 'x');
+      const pump = () => {
+        while (sent < 300 * 1024 * 1024 && !req.destroyed && req.write(chunk)) sent += chunk.length;
+        if (sent < 300 * 1024 * 1024 && !req.destroyed) req.once('drain', () => ((sent += chunk.length), pump()));
+      };
+      pump();
+    });
+    expect([413, -1]).toContain(result.status);
+    expect(result.sentAfter).toBeLessThan(64 * 1024 * 1024);
+  });
+
   it('has no way to approve, cancel or change an ask over HTTP', async () => {
     for (const [method, path] of [
       ['POST', '/v1/approve'],

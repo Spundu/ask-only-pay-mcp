@@ -62,7 +62,7 @@ describe('ApproverClient (SPEC.md §2.1, §2.2)', () => {
   });
 
   it.each([
-    [404, 'NOT_FOUND'],
+    [404, 'APPROVER_REFUSED'],
     [429, 'TOO_MANY_PENDING'],
     [400, 'APPROVER_REFUSED'],
     [409, 'APPROVER_REFUSED'],

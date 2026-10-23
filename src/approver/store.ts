@@ -7,7 +7,7 @@ import type { AccountFields, PayFields, State } from '../rules.js';
 export const TTL_SECONDS = 600;
 export const MAX_PENDING = 50;
 /** Decided asks kept for `status`; past this the oldest are forgotten. */
-const MAX_KEPT = 1000;
+export const MAX_KEPT = 1000;
 const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 export type AskBody = { kind: 'pay'; fields: PayFields } | { kind: 'account_create'; fields: AccountFields };
@@ -17,6 +17,7 @@ export interface Ask {
   readonly body: AskBody;
   readonly createdAt: number;
   readonly expiresAt: number;
+  readonly requestId: string;
   state: State;
   ref?: string;
 }
@@ -41,7 +42,7 @@ export class Store {
     const now = this.clock();
     let id = newId();
     while (this.asks.has(id)) id = newId();
-    const ask: Ask = { id, body, createdAt: now, expiresAt: now + TTL_SECONDS, state: 'pending' };
+    const ask: Ask = { id, body, createdAt: now, expiresAt: now + TTL_SECONDS, requestId, state: 'pending' };
     this.asks.set(id, ask);
     this.requestIds.add(requestId);
     this.forgetOldest();
@@ -80,7 +81,11 @@ export class Store {
   private forgetOldest(): void {
     for (const [id, ask] of this.asks) {
       if (this.asks.size <= MAX_KEPT) return;
-      if (ask.state !== 'pending') this.asks.delete(id);
+      if (ask.state !== 'pending') {
+        this.asks.delete(id);
+        // Bounded memory: a forgotten ask's request id may be used again. The MCP server mints random UUIDs, so it never is.
+        this.requestIds.delete(ask.requestId);
+      }
     }
   }
 }

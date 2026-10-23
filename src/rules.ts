@@ -9,8 +9,8 @@ export const HANDLE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 export const APPROVAL_ID = /^[A-Z2-7]{10}$/;
 const AMOUNT = /^(0|[1-9][0-9]{0,8})(\.[0-9]{1,2})?$/;
 const CURRENCY = /^[A-Z]{3}$/;
-/** 13 or more digits, each pair split by at most one space or dash. */
-const DIGIT_RUN = /[0-9](?:[ -]?[0-9]){12,}/g;
+/** 13 or more digits, each pair split by at most two spaces, dots, dashes or underscores. */
+const DIGIT_RUN = /[0-9](?:[ ._-]{0,2}[0-9]){12,}/g;
 
 /** The Luhn checksum that every card number passes (and a random digit string passes one time in ten). */
 function luhn(digits: string): boolean {
@@ -24,14 +24,29 @@ function luhn(digits: string): boolean {
 }
 
 /**
- * True if the text holds a card number: a run of 13 to 19 digits (spaces or dashes allowed) that passes
- * Luhn. This catches a card pasted by mistake; it is no defence against an agent set on hiding one (it could
+ * True if the text holds a card number: 13 to 19 digits in a row (with separators allowed, after full-width
+ * digits are read as digits and %-escapes decoded) that pass Luhn, anywhere inside a longer run too. So a
+ * long digit run is refused almost always: a random 13-digit window passes Luhn one time in ten.
+ *
+ * This catches a card pasted by mistake; it is no defence against an agent set on hiding one (it could
  * spell the digits out), which is why the agent should never see a card at all.
  */
 export function hasCardNumber(text: string): boolean {
-  for (const [run] of text.matchAll(DIGIT_RUN)) {
-    const digits = run.replace(/[ -]/g, '');
-    if (digits.length <= 19 && luhn(digits)) return true;
+  const forms = new Set([text.normalize('NFKC')]);
+  try {
+    forms.add(decodeURIComponent(text).normalize('NFKC'));
+  } catch {
+    // not %-encoded text
+  }
+  for (const form of forms) {
+    for (const [run] of form.matchAll(DIGIT_RUN)) {
+      const digits = run.replace(/[ ._-]/g, '');
+      for (let start = 0; start + 13 <= digits.length; start++) {
+        for (let len = 13; len <= 19 && start + len <= digits.length; len++) {
+          if (luhn(digits.slice(start, start + len))) return true;
+        }
+      }
+    }
   }
   return false;
 }

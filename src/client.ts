@@ -55,15 +55,15 @@ export class ApproverClient {
   constructor(private readonly transport: Transport) {}
 
   async requestPay(fields: PayFields, requestId: string): Promise<Ack> {
-    return parse(AckSchema, 201, await this.send(() => this.transport.post('/v1/pay', { ...fields, request_id: requestId })));
+    return parse(AckSchema, 201, false, await this.send(() => this.transport.post('/v1/pay', { ...fields, request_id: requestId })));
   }
 
   async requestAccountCreate(fields: AccountFields, requestId: string): Promise<Ack> {
-    return parse(AckSchema, 201, await this.send(() => this.transport.post('/v1/account/create', { ...fields, request_id: requestId })));
+    return parse(AckSchema, 201, false, await this.send(() => this.transport.post('/v1/account/create', { ...fields, request_id: requestId })));
   }
 
   async status(approvalId: string): Promise<Result> {
-    const result = parse(ResultSchema, 200, await this.send(() => this.transport.get(`/v1/result/${encodeURIComponent(approvalId)}`)));
+    const result = parse(ResultSchema, 200, true, await this.send(() => this.transport.get(`/v1/result/${encodeURIComponent(approvalId)}`)));
     // An answer about another ask is not an answer.
     if (result.approval_id !== approvalId) throw new ClientError('APPROVER_RESPONSE_REJECTED');
     return result;
@@ -78,8 +78,9 @@ export class ApproverClient {
   }
 }
 
-function parse<S extends z.ZodType>(schema: S, expected: number, reply: Reply): z.output<S> {
-  if (reply.status === 404) throw new ClientError('NOT_FOUND');
+/** `lookup`: a 404 means "no such ask" (status). On an ask, a 404 is a misconfigured approver URL. */
+function parse<S extends z.ZodType>(schema: S, expected: number, lookup: boolean, reply: Reply): z.output<S> {
+  if (reply.status === 404 && lookup) throw new ClientError('NOT_FOUND');
   if (reply.status === 429) throw new ClientError('TOO_MANY_PENDING');
   // The approver's own error text is never passed on (SPEC.md §2.4).
   if (reply.status !== expected) throw new ClientError('APPROVER_REFUSED');

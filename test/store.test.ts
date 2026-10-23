@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { command } from '../src/approver/console.js';
 import { recap, safe } from '../src/approver/recap.js';
-import { MAX_PENDING, Store, TTL_SECONDS, type AskBody } from '../src/approver/store.js';
+import { MAX_KEPT, MAX_PENDING, Store, TTL_SECONDS, type AskBody } from '../src/approver/store.js';
 
 const PAY: AskBody = { kind: 'pay', fields: { merchant: 'Example Shop', amount: '19.00', currency: 'EUR', card_handle: 'card-2', checkout_url: 'https://shop.example/checkout/123' } };
 
@@ -44,6 +44,35 @@ describe('the approver store (SPEC.md §6, §7)', () => {
     expect(s.pending()).toEqual([]);
   });
 
+  it('keeps at most 1,000 asks, forgetting the oldest decided ones and their request ids', () => {
+    const s = new Store();
+    const ids: string[] = [];
+    for (let i = 0; i < MAX_KEPT + 100; i++) {
+      const added = s.add(PAY, `r${i}`);
+      if (!added.ok) throw new Error('not added');
+      s.decide(added.ask.id, 'deny');
+      ids.push(added.ask.id);
+    }
+    expect(s.get(ids[0]!)).toBeUndefined();
+    expect(s.get(ids[99]!)).toBeUndefined();
+    expect(s.get(ids[100]!)?.state).toBe('denied');
+    expect(s.get(ids.at(-1)!)?.state).toBe('denied');
+    // The memory of request ids is bounded the same way.
+    expect(s.add(PAY, 'r0').ok).toBe(true);
+    expect(s.add(PAY, `r${MAX_KEPT + 99}`)).toEqual({ ok: false, error: 'duplicate_request' });
+  });
+
+  it('never forgets a pending ask to make room', () => {
+    const s = new Store();
+    const pending = s.add(PAY, 'pending');
+    if (!pending.ok) throw new Error('not added');
+    for (let i = 0; i < MAX_KEPT + 10; i++) {
+      const added = s.add(PAY, `r${i}`);
+      if (added.ok) s.decide(added.ask.id, 'deny');
+    }
+    expect(s.get(pending.ask.id)?.state).toBe('pending');
+  });
+
   it('makes a decision final: a denied ask cannot be approved, an approved one cannot be denied', () => {
     const s = new Store();
     const a = s.add(PAY, 'a');
@@ -66,7 +95,7 @@ describe('the recap', () => {
     expect(text).toContain(`[ask ${added.ask.id}] PAY 19.00 EUR`);
     expect(text).toContain('to:        Example Shop');
     expect(text).toContain('site:      shop.example');
-    expect(text).toContain("agent's reason (unchecked): renew the domain");
+    expect(text).toContain('  reason:    (from the agent, unchecked) renew the domain');
     expect(text).toContain('expires:   in 10 min');
   });
 
@@ -96,9 +125,11 @@ describe('the console', () => {
     const b = s.add(PAY, 'b');
     if (!a.ok || !b.ok) throw new Error('not added');
     expect(command('list', s)).toContain(a.ask.id);
-    expect(command(`approve ${a.ask.id.toLowerCase()}`, s)).toMatch(new RegExp(`^${a.ask.id}: approved \\(demo-[0-9a-f]{8}, no money moved`));
+    const approved = command(`approve ${a.ask.id.toLowerCase()}`, s).split('\n');
+    expect(approved[0]).toBe(`${a.ask.id}: approved: PAY 19.00 EUR at shop.example`);
+    expect(approved[1]).toMatch(/^ {2}demo-[0-9a-f]{8}: no money moved/);
     expect(command(`deny ${a.ask.id}`, s)).toBe(`${a.ask.id} is already approved: a decision is final`);
-    expect(command(`deny ${b.ask.id}`, s)).toBe(`${b.ask.id}: denied`);
+    expect(command(`deny ${b.ask.id}`, s)).toBe(`${b.ask.id}: denied: PAY 19.00 EUR at shop.example`);
     expect(command('list', s)).toBe('no pending asks');
     expect(command('approve AAAAAAAAAA', s)).toBe('no ask AAAAAAAAAA');
   });

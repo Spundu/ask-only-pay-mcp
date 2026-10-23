@@ -2,6 +2,7 @@
 // certificate from the configured CA, for the expected name. There is no plain-HTTP fallback (SPEC.md §5).
 
 import https from 'node:https';
+import { isIP } from 'node:net';
 import type { Reply, Transport } from './client.js';
 
 export interface TlsMaterial {
@@ -14,7 +15,7 @@ export const TIMEOUT_MS = 10_000;
 /** The approver's answers are a few hundred bytes; anything far larger is not one. */
 const MAX_REPLY_BYTES = 64 * 1024;
 
-export function httpsTransport(baseUrl: URL, servername: string, tls: TlsMaterial): Transport {
+export function httpsTransport(baseUrl: URL, servername: string, tls: TlsMaterial, timeoutMs = TIMEOUT_MS): Transport {
   const call = (method: 'GET' | 'POST', path: string, body?: unknown): Promise<Reply> =>
     new Promise((resolve, reject) => {
       const payload = body === undefined ? undefined : JSON.stringify(body);
@@ -25,13 +26,14 @@ export function httpsTransport(baseUrl: URL, servername: string, tls: TlsMateria
           port: baseUrl.port || 443,
           path,
           method,
-          servername,
+          // An IP address is checked against the certificate's IP entries; TLS forbids it as a server name.
+          ...(isIP(servername) ? {} : { servername }),
           cert: tls.cert,
           key: tls.key,
           ca: tls.ca,
           rejectUnauthorized: true,
           agent: false,
-          timeout: TIMEOUT_MS,
+          timeout: timeoutMs,
           headers: {
             accept: 'application/json',
             ...(payload === undefined ? {} : { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }),
@@ -52,6 +54,10 @@ export function httpsTransport(baseUrl: URL, servername: string, tls: TlsMateria
           res.on('error', reject);
         },
       );
+      // `timeout` alone is an idle timeout: an approver sending a byte every few seconds would never trip it.
+      // The deadline covers the whole call (SPEC.md §4).
+      const deadline = setTimeout(() => req.destroy(new Error('deadline')), timeoutMs);
+      req.on('close', () => clearTimeout(deadline));
       req.on('timeout', () => req.destroy(new Error('timeout')));
       req.on('error', reject);
       req.end(payload);

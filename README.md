@@ -29,12 +29,18 @@ This project makes the agent's side **powerless by construction** instead:
 | What the person approves is what is recorded. | The approver renders the recap from the ask it stored. An ask cannot be changed after it was made, and a decision is final. |
 | It cannot replay an ask. | The server mints the request id, never the agent. The approver refuses an id it has seen. |
 | Errors are codes. | A failure returns `{"error": "CODE"}`: never a message, URL or response body that could carry something the agent should not see. |
-| No secrets in arguments. | A card is a handle (`card-2`), an identity a handle (`work`). A field that holds a card number (13–19 digits passing Luhn) is refused. |
+| No secrets in arguments. | A card is a handle (`card-2`), an identity a handle (`work`). A field that holds a card number (13–19 digits passing Luhn, even inside a longer number or split by spaces or dots) is refused. |
 | No silent fallback. | mTLS is required, and there is no switch to turn it off. Missing or unreadable configuration stops the server before it serves anything. |
 
-The recap also defends the person: control characters, bidirectional overrides and zero-width
-characters in an ask are shown as escapes (so a merchant name cannot redraw the terminal or hide a
-digit), and the site is shown in punycode (so `shop.exаmple` with a Cyrillic `а` shows as `xn--…`).
+The recap also defends the person against text the agent wrote:
+
+- **No fake recaps.** The approver cuts every line to 76 columns itself and marks each further line with
+  `>`, so a fake `[ask …]` block hidden in a long reason can never begin a line. A decision is answered
+  with what was decided (`approved: PAY 19.00 EUR at shop.example`), from the stored ask.
+- **No hidden characters.** Control, bidi, zero-width, tag and other invisible characters are shown as
+  `\u{…}` escapes, and runs of spaces become one.
+- **No look-alike sites.** The site is shown in punycode, so `shop.exаmple` with a Cyrillic `а` shows as
+  `xn--…`.
 
 ## Quick start (from a clone)
 
@@ -73,15 +79,21 @@ claude mcp add --transport stdio ask-only-pay \
 [ask K7Q2M4XZ3A] PAY 19.00 EUR
   to:        Example Shop
   card:      card-2
-  checkout:  https://shop.example/checkout/123
   site:      shop.example
-  agent's reason (unchecked): renew the domain
+  checkout:  https://shop.example/checkout/123
+  reason:    (from the agent, unchecked) renew the domain
   expires:   in 10 min
   approve K7Q2M4XZ3A   or   deny K7Q2M4XZ3A
 ```
 
-Type `approve K7Q2M4XZ3A` or `deny K7Q2M4XZ3A`. `list` shows what is pending. Claude reads the decision
-with the `status` verb.
+Type `approve K7Q2M4XZ3A` or `deny K7Q2M4XZ3A`. The approver answers with what you decided:
+
+```
+K7Q2M4XZ3A: approved: PAY 19.00 EUR at shop.example
+  demo-3e40a688: no money moved (reference approver)
+```
+
+`list` shows what is pending. Claude reads the decision with the `status` verb.
 
 ## The tool
 
@@ -108,7 +120,8 @@ Limits worth knowing:
   cannot type: another user account, another machine, or at least a terminal the agent has no access to.
   If the agent has a shell as the same user on the same machine, it can reach anything that user can.
 - **The client key only lets you ask.** An agent that reads `client.key` can make more asks, which the
-  person sees and denies. It cannot approve one.
+  person sees and denies. It cannot approve one. It can, though, fill the 50 pending places with junk
+  and block real asks until they expire (10 minutes). Keep the key readable only by the MCP server's user.
 - **The card check is a net, not a wall.** It catches a card number pasted by mistake. An agent set on
   leaking one could spell the digits out. The real defence is that the agent never sees a card.
 - **Memory only.** The approver keeps asks in memory. A restart forgets them, which denies nothing that

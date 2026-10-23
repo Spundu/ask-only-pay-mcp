@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import process from 'node:process';
 import { createInterface } from 'node:readline';
+import { invalidTls } from '../config.js';
 import { command } from './console.js';
 import { createApproverServer } from './http.js';
 import { recap } from './recap.js';
@@ -29,6 +30,8 @@ function file(name: string): Buffer {
 }
 
 const tls = { cert: file('ASK_ONLY_PAY_APPROVER_CERT'), key: file('ASK_ONLY_PAY_APPROVER_KEY'), ca: file('ASK_ONLY_PAY_APPROVER_CA') };
+const badTls = invalidTls(tls);
+if (badTls) fail(badTls);
 const portText = process.env.ASK_ONLY_PAY_APPROVER_PORT?.trim() || '8443';
 if (!/^\d{1,5}$/.test(portText) || Number(portText) > 65535) fail('ASK_ONLY_PAY_APPROVER_PORT must be a port number');
 const host = process.env.ASK_ONLY_PAY_APPROVER_HOST?.trim() || '127.0.0.1';
