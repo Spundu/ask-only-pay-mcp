@@ -4,6 +4,7 @@
 import https from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
+import type { TLSSocket } from 'node:tls';
 import { z } from 'zod';
 import { APPROVAL_ID, accountFields, payFields } from '../rules.js';
 import type { Ask, AskBody, Store } from './store.js';
@@ -17,8 +18,9 @@ export interface ApproverTls {
 
 const MAX_BODY_BYTES = 16 * 1024;
 /**
- * Open connections from one address, counted from the first TCP byte (before any certificate is shown).
- * One MCP server needs one at a time; a host elsewhere that opens many cannot crowd out the real client.
+ * Connections from one address that have not yet finished their handshake, counted from when the TCP
+ * connection is accepted. One MCP server needs one at a time; a host elsewhere that opens many cannot crowd
+ * out the real client. A process on the approver's own host shares its address and can (SPEC.md §6).
  */
 const MAX_PER_ADDRESS = 8;
 /** All open connections: a cap so idle ones from many addresses cannot pile up. */
@@ -40,27 +42,32 @@ export function createApproverServer(tls: ApproverTls, store: Store, onAsk: (ask
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   server.maxConnections = MAX_CONNECTIONS;
-  const open = new Map<string, number>();
+  // Connections still in their handshake, by address. A connection leaves the count when its client proves
+  // its certificate (secureConnection) or when it closes, whichever is first.
+  const handshaking = new Map<string, Set<string>>();
+  const settle = (address: string, key: string) => {
+    const keys = handshaking.get(address);
+    if (keys?.delete(key) && keys.size === 0) handshaking.delete(address);
+  };
   server.on('connection', (socket: Socket) => {
     const address = socket.remoteAddress ?? 'unknown';
-    const count = (open.get(address) ?? 0) + 1;
-    if (count > MAX_PER_ADDRESS) {
+    const key = `${socket.remotePort ?? 0}`;
+    const keys = handshaking.get(address) ?? new Set<string>();
+    if (keys.size >= MAX_PER_ADDRESS) {
       socket.destroy();
       return;
     }
-    open.set(address, count);
-    socket.once('close', () => {
-      const left = (open.get(address) ?? 1) - 1;
-      if (left > 0) open.set(address, left);
-      else open.delete(address);
-    });
+    keys.add(key);
+    handshaking.set(address, keys);
+    socket.once('close', () => settle(address, key));
   });
+  server.on('secureConnection', (socket: TLSSocket) => settle(socket.remoteAddress ?? 'unknown', `${socket.remotePort ?? 0}`));
   return server;
 }
 
 async function route(req: IncomingMessage, res: ServerResponse, store: Store, onAsk: (ask: Ask) => void): Promise<void> {
   // rejectUnauthorized already refused the handshake; this is the second lock on the same door.
-  if (!(req.socket as import('node:tls').TLSSocket).authorized) return send(res, 401, { error: 'unauthorized' });
+  if (!(req.socket as TLSSocket).authorized) return send(res, 401, { error: 'unauthorized' });
   const path = (req.url ?? '').split('?')[0] ?? '';
 
   if (req.method === 'POST' && (path === '/v1/pay' || path === '/v1/account/create')) {

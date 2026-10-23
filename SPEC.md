@@ -55,7 +55,7 @@ One tool. Arguments are an object with `verb` and the fields for that verb. Unkn
 
 | verb | fields | returns |
 |---|---|---|
-| `pay` | `merchant` (1–120 chars), `amount` (decimal string, `^(0|[1-9][0-9]{0,8})(\.[0-9]{1,2})?$`, above 0), `currency` (`^[A-Z]{3}$`), `card_handle` (handle), `checkout_url` (an `https:` URL, at most 2,000 chars), `reason` (optional, at most 500 chars) | `{approval_id, state: "pending", expires_at}` |
+| `pay` | `merchant` (1–120 UTF-16 code units, so 60 emoji), `amount` (decimal string, `^(0|[1-9][0-9]{0,8})(\.[0-9]{1,2})?$`, above 0), `currency` (`^[A-Z]{3}$`), `card_handle` (handle), `checkout_url` (an `https:` URL, at most 2,000 chars), `reason` (optional, at most 500 chars) | `{approval_id, state: "pending", expires_at}` |
 | `account_create` | `provider_url` (an `https:` URL, at most 2,000 chars), `identity_handle` (optional handle, default `primary`), `reason` (optional, at most 500 chars) | same as `pay` |
 | `status` | `approval_id` (`^[A-Z2-7]{10}$`) | `{approval_id, state, ref?, error_code?}` |
 
@@ -94,7 +94,7 @@ MCP server:
 | `ASK_ONLY_PAY_URL` | required. The approver's base URL, `https://host:port`. |
 | `ASK_ONLY_PAY_CLIENT_CERT`, `ASK_ONLY_PAY_CLIENT_KEY` | required. PEM files: this client's certificate and key (`client.pem`, `client.key`). |
 | `ASK_ONLY_PAY_CA` | required. The CA that signed the approver's certificate (`approver-ca.pem`). |
-| `ASK_ONLY_PAY_SERVERNAME` | optional. The name to expect in the approver's certificate. Default: the URL's host. |
+| `ASK_ONLY_PAY_SERVERNAME` | optional. The name (or IP address) the approver's certificate must carry; it is checked instead of the URL's host. Default: the URL's host. |
 
 There is no switch to turn mTLS off. Tests use real certificates.
 
@@ -130,8 +130,10 @@ validates every field by the same rules as §3 itself: it never trusts the MCP s
 
 Limits: a body declared or found to be over 16 KiB gets 413 at once and the connection is closed (the rest is
 never read); a TLS handshake must finish within 5 s; at most 8 connections at once from one address
-(counted from the first byte, before any certificate), so a host elsewhere cannot crowd out the real
-client, and at most 1,024 in all. The approver keeps the
+that have not finished their handshake (counted from when the connection is accepted), so a host
+elsewhere cannot crowd out the real client, and at most 1,024 in all. A process on the approver's own host
+shares the client's address and can still hold those 8 places: it only blocks asks (the safe failure), and
+such a process could stop the approver anyway. The approver keeps the
 1,000 most recent asks (pending asks are never dropped) and the request ids of those it keeps: a request id
 is refused while its ask is kept.
 
@@ -147,6 +149,7 @@ A new ask prints a recap on the approver's terminal, built from the stored ask o
   checkout:  https://shop.example/checkout/123
   reason:    (from the agent, unchecked) renew the domain
   expires:   in 10 min
+  approving: PAY 19.00 EUR at shop.example
   approve K7Q2M4XZ3A   or   deny K7Q2M4XZ3A
 ```
 
@@ -162,12 +165,20 @@ Rules for the recap, so text from the agent cannot forge or blur it:
   name cannot begin a line.
 - Runs of spaces become one. Shown as `\u{…}` escapes: control characters, format characters (bidi
   overrides, zero-width and tag characters), line and paragraph separators, private-use and unassigned code
-  points, variation selectors, blank fillers (Hangul, braille), every space but the plain one, and every
+  points, variation selectors, blank fillers (Hangul fillers and conjoining jamo, braille), every space but the plain one, and every
   combining mark after the first on a character (a stack of marks can be drawn over the lines around it).
 - URLs are shown as stored (§3); the `site` line shows the host in punycode, so a look-alike domain
   (`shop.exаmple` with a Cyrillic а) shows as `xn--…`. A host too long for one line is shown by its end,
   which names who owns the site, after `...`: the `site` line and the decision both read
   `....evil.com`, never `shop.example.aaa…` with the owner cut off.
+- The recap stays short: the merchant takes at most 2 rows, a URL 3 and the reason 4; past that a row
+  says `... N more characters not shown`. It ends with the approver's own summary (`approving: PAY 19.00
+  EUR at shop.example`) right above the approve line, so agent text is never the last thing read.
+- `to` (the merchant) and `reason` are the agent's words. The `site` line and the `approving` line are
+  the approver's, read from the stored URL: those are what to check.
+- A recap needs a terminal at least 76 columns wide. On a narrower one the approver shows only
+  `N ask(s) not shown (IDS): this terminal is W columns, a recap needs 76. Widen it, then type list.`
+  (Output to a pipe or file is not a terminal and gets the recap as is.)
 - An approval is final: there is no way to change an ask after it was made, so what the person approved is
   exactly what is recorded.
 
@@ -189,9 +200,13 @@ Rules for the recap, so text from the agent cannot forge or blur it:
 - Card numbers: found inside longer runs, behind dots, double spaces, underscores, pluses, commas,
   full-width digits, %-escapes and a stray `%`; refused in the approver's `ref` and `error_code` too.
 - URLs: stored as resolved, so the approver keeps `https://shop.example/@evil.com`, not the raw text.
-- Transport: an approver that drips bytes is cut off at the deadline; a reply over 64 KiB is refused.
+- Transport: an approver that drips bytes is cut off at the deadline; a reply over 64 KiB is refused; the
+  certificate is checked against the server name given, an IP address too.
+- Recap size: with every field at its longest, the recap is at most 16 lines and ends with the approver's
+  summary; the decision line fits 76 columns; a narrow terminal gets the notice, not the recap.
 - Approver limits: a body declared too large gets 413 without the approver waiting for it; a body sent
-  too large stops being read; the 9th connection from one address is closed before any handshake, and
+  too large stops being read; the 9th connection from one address is closed before any handshake, while 10 authenticated ones do not
+  block another, and
   (on Linux, where a second loopback address exists) a flood from one address does not stop the real client.
 - Docs: SPEC.md is whole, its error codes are the tool's, and every environment variable named in the
   README and here exists in the code.

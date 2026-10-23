@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net';
 import process from 'node:process';
 import { createInterface } from 'node:readline';
 import { invalidTls } from '../config.js';
-import { command } from './console.js';
+import { command, forTerminal } from './console.js';
 import { createApproverServer } from './http.js';
 import { recap } from './recap.js';
 import { Store, systemClock } from './store.js';
@@ -37,7 +37,8 @@ if (!/^\d{1,5}$/.test(portText) || Number(portText) > 65535) fail('ASK_ONLY_PAY_
 const host = process.env.ASK_ONLY_PAY_APPROVER_HOST?.trim() || '127.0.0.1';
 
 const store = new Store();
-const print = (text: string) => process.stdout.write(`${text}\n`);
+// A recap only on a terminal wide enough for it (console.ts forTerminal); a pipe gets it as is.
+const print = (text: string) => process.stdout.write(`${forTerminal(text, process.stdout.isTTY ? process.stdout.columns : undefined)}\n`);
 const server = createApproverServer(tls, store, (ask) => print(`\n${recap(ask, systemClock())}\n`));
 server.on('tlsClientError', () => {}); // a refused handshake is the point, not an error to report
 server.listen(Number(portText), host, () => {

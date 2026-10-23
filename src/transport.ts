@@ -3,6 +3,7 @@
 
 import https from 'node:https';
 import { isIP } from 'node:net';
+import { checkServerIdentity, type PeerCertificate } from 'node:tls';
 import type { Reply, Transport } from './client.js';
 
 export interface TlsMaterial {
@@ -26,8 +27,10 @@ export function httpsTransport(baseUrl: URL, servername: string, tls: TlsMateria
           port: baseUrl.port || 443,
           path,
           method,
-          // An IP address is checked against the certificate's IP entries; TLS forbids it as a server name.
+          // TLS forbids an IP address as the server name sent (SNI), so it is sent only for a host name; the
+          // certificate is always checked against `servername`, IP or name, not against the URL's host.
           ...(isIP(servername) ? {} : { servername }),
+          checkServerIdentity: (_host: string, cert: PeerCertificate) => checkServerIdentity(servername, cert),
           cert: tls.cert,
           key: tls.key,
           ca: tls.ca,

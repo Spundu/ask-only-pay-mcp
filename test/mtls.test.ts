@@ -2,6 +2,7 @@
 
 import https from 'node:https';
 import net from 'node:net';
+import tls from 'node:tls';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApproverServer } from '../src/approver/http.js';
@@ -155,6 +156,24 @@ describe('the approver API (SPEC.md §6)', () => {
     // Once they are gone, the same address is served again.
     await new Promise((r) => setTimeout(r, 100));
     expect(await raw(good)).toBe(404);
+  });
+
+  it('counts only connections still in their handshake: 8 authenticated ones do not block a 9th', async () => {
+    const held: tls.TLSSocket[] = [];
+    try {
+      // One after another, as a real client opens them; each is through its handshake before the next.
+      for (let i = 0; i < 10; i++) {
+        await new Promise<void>((resolve, reject) => {
+          const s = tls.connect({ port, host: '127.0.0.1', servername: 'localhost', ca: certFile('good', 'approver-ca.pem'), ...good }, () => resolve());
+          held.push(s);
+          s.on('error', reject);
+        });
+        await new Promise((r) => setTimeout(r, 20)); // the server's side of the handshake ends just after the client's
+      }
+      expect(await raw(good)).toBe(404);
+    } finally {
+      for (const s of held) s.destroy();
+    }
   });
 
   it.runIf(process.platform === 'linux')('keeps serving the real client while another address floods it', async () => {

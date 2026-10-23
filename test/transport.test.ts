@@ -54,6 +54,14 @@ describe('transport limits', () => {
     await expect(transport().get('/huge')).rejects.toThrow('reply too large');
   });
 
+  it('checks the certificate against the server name given, even an IP address, not the URL host', async () => {
+    const tlsGood = { cert: certFile('good', 'client.pem'), key: certFile('good', 'client.key'), ca: certFile('good', 'approver-ca.pem') };
+    const url = new URL(`https://localhost:${port}`);
+    await expect(httpsTransport(url, '10.9.9.9', tlsGood).get('/ok')).rejects.toThrow();
+    await expect(httpsTransport(url, 'evil.test', tlsGood).get('/ok')).rejects.toThrow();
+    expect((await httpsTransport(url, '127.0.0.1', tlsGood).get('/ok')).status).toBe(200);
+  });
+
   it('reaches an approver by IP address, checking the certificate\'s IP entry', async () => {
     const t = httpsTransport(new URL(`https://127.0.0.1:${port}`), '127.0.0.1', { cert: certFile('good', 'client.pem'), key: certFile('good', 'client.key'), ca: certFile('good', 'approver-ca.pem') });
     expect((await t.get('/ok')).status).toBe(200);

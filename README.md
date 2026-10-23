@@ -84,6 +84,7 @@ claude mcp add --transport stdio ask-only-pay \
   checkout:  https://shop.example/checkout/123
   reason:    (from the agent, unchecked) renew the domain
   expires:   in 10 min
+  approving: PAY 19.00 EUR at shop.example
   approve K7Q2M4XZ3A   or   deny K7Q2M4XZ3A
 ```
 
@@ -119,7 +120,12 @@ Limits worth knowing:
 
 - **Where the approver runs matters.** Its console is the approval channel. Run it where the agent
   cannot type: another user account, another machine, or at least a terminal the agent has no access to.
-  If the agent has a shell as the same user on the same machine, it can reach anything that user can.
+  If the agent has a shell as the same user on the same machine, it can reach anything that user can,
+  including holding the approver's connection places so asks fail (the safe failure).
+- **Check the `site` and `approving` lines.** The merchant name and the reason are the agent's words.
+  The site and the closing `approving:` line are the approver's own, from the stored URL.
+- **A recap needs a terminal at least 76 columns wide.** On a narrower one the approver shows only the
+  ids of new asks and asks you to widen it, since wrapped lines could let agent text start a row.
 - **The client key only lets you ask.** An agent that reads `client.key` can make more asks, which the
   person sees and denies. It cannot approve one. It can, though, fill the 50 pending places with junk
   and block real asks until they expire (10 minutes). Keep the key readable only by the MCP server's user.

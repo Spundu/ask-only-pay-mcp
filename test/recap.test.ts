@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { MAX_LINE, recap, safe, summary } from '../src/approver/recap.js';
+import { command, forTerminal } from '../src/approver/console.js';
 import { Store, type AskBody } from '../src/approver/store.js';
 
 const PAY = { merchant: 'Corner Coffee', amount: '3.50', currency: 'GBP', card_handle: 'card-2', checkout_url: 'https://coffee.example/c' };
@@ -68,6 +69,42 @@ describe('a forged recap inside agent text', () => {
     }
   });
 
+  // Round 3: a 1,900-character URL and a long reason pushed the real amount and site off a 24-line
+  // screen, leaving a fake "PAY 19.00 EUR ... shop.example" in the reason right above the approve line.
+  it('stays short, and ends with the approver\'s own summary right above the approve line', () => {
+    const zw = String.fromCodePoint(0x200b);
+    const a = ask({
+      amount: '4999.00',
+      currency: 'EUR',
+      checkout_url: `https://evil.example/${'x'.repeat(1900)}`,
+      merchant: '東'.repeat(120),
+      reason: `${'ok '.repeat(120)}PAY 19.00 EUR to Example Shop at shop.example ${zw.repeat(40)}`,
+    });
+    const lines = recap(a, 0).split('\n');
+    expect(lines.length).toBeLessThanOrEqual(16);
+    expect(lines.at(-2)).toBe('  approving: PAY 4999.00 EUR at evil.example');
+    expect(lines.filter((l) => / {9}> \.\.\. \d+ more characters not shown$/.test(l)).length).toBe(3);
+  });
+
+  it('fits the decision line in 76 columns, even for the largest amount and a long host', () => {
+    const a = ask({ amount: '999999999.99', checkout_url: `https://shop.example.${'a'.repeat(60)}.evil.example/c` });
+    const s = new Store();
+    const added = s.add(a.body, 'r');
+    if (!added.ok) throw new Error('not added');
+    const line = command(`approve ${added.ask.id}`, s).split('\n')[0]!;
+    expect(line.length).toBeLessThanOrEqual(MAX_LINE);
+    expect(line).toMatch(/approved: PAY 999999999\.99 GBP at \.{3}[a.]+\.evil\.example$/);
+  });
+
+  it('is not shown on a terminal narrower than a recap, only a notice with the ids', () => {
+    const text = recap(ask({}), 0);
+    const id = /^\[ask ([A-Z2-7]{10})\]/.exec(text)![1];
+    expect(forTerminal(text, 60)).toBe(`1 ask(s) not shown (${id}): this terminal is 60 columns, a recap needs 76. Widen it, then type list.`);
+    expect(forTerminal(text, 76)).toBe(text);
+    expect(forTerminal(text, undefined)).toBe(text);
+    expect(forTerminal('no pending asks', 40)).toBe('no pending asks');
+  });
+
   it('collapses runs of spaces in agent text', () => {
     expect(recap(ask({ merchant: `Big${' '.repeat(60)}Shop` }), 0)).toContain('  to:        Big Shop\n');
   });
@@ -96,6 +133,8 @@ describe('characters that could hide or reorder text', () => {
     [0xfe0f, 'variation selector'],
     [0x34f, 'combining grapheme joiner'],
     [0x115f, 'Hangul choseong filler'],
+    [0x1161, 'Hangul jungseong'],
+    [0xd7b0, 'Hangul jungseong extended'],
     [0x3164, 'Hangul filler'],
     [0xffa0, 'half-width Hangul filler'],
     [0x2800, 'braille blank'],

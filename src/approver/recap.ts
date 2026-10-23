@@ -34,15 +34,21 @@ export function safe(text: string): string {
     .normalize('NFC')
     .replace(
       // eslint-disable-next-line no-misleading-character-class -- combining code points are listed on purpose, to escape them
-      /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cn}\u{a0}\u{1680}\u{2000}-\u{200a}\u{202f}\u{205f}\u{3000}\u{fe00}-\u{fe0f}\u{e0100}-\u{e01ef}\u{34f}\u{115f}\u{1160}\u{17b4}\u{17b5}\u{2800}\u{3164}\u{ffa0}]/gu,
+      /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cn}\u{a0}\u{1680}\u{2000}-\u{200a}\u{202f}\u{205f}\u{3000}\u{fe00}-\u{fe0f}\u{e0100}-\u{e01ef}\u{34f}\u{115f}\u{1160}-\u{11ff}\u{d7b0}-\u{d7ff}\u{17b4}\u{17b5}\u{2800}\u{3164}\u{ffa0}]/gu,
       escape,
     )
     .replace(/(\p{M})(\p{M}+)/gu, (_all, first: string, rest: string) => first + [...rest].map(escape).join(''))
     .replace(/ {2,}/g, ' ');
 }
 
-/** One labelled field, cut into lines of at most WIDTH columns; later lines start with MORE. */
-function field(label: string, value: string): string[] {
+/** Rows a field may take: the whole recap stays short enough that its first and last lines share a screen. */
+const MAX_ROWS = { merchant: 2, url: 3, reason: 4 } as const;
+
+/**
+ * One labelled field, cut into lines of at most WIDTH columns; later lines start with MORE. Past `maxRows`
+ * the rest is not shown, and the last row says how much was left out.
+ */
+function field(label: string, value: string, maxRows = Infinity): string[] {
   const rows: string[] = [];
   let row = '';
   let used = 0;
@@ -57,6 +63,11 @@ function field(label: string, value: string): string[] {
     used += w;
   }
   rows.push(row);
+  if (rows.length > maxRows) {
+    const shown = rows.slice(0, maxRows - 1);
+    const hidden = [...rows.slice(maxRows - 1).join('')].length;
+    rows.splice(0, rows.length, ...shown, `... ${hidden} more characters not shown`);
+  }
   return rows.map((r, i) => (i === 0 ? `  ${`${label}:`.padEnd(LABEL - 2)}` : MORE) + r);
 }
 
@@ -65,12 +76,15 @@ function hostTail(host: string, max: number): string {
   return host.length <= max ? host : `...${host.slice(-(max - 3))}`;
 }
 
-/** A one-line summary of what an ask does, from its stored fields (the console repeats it on a decision). */
-export function summary(ask: Ask): string {
+/**
+ * A one-line summary of what an ask does, from its stored fields, in at most `max` columns. The recap ends
+ * with it, right above the approve line, and the console repeats it on a decision.
+ */
+export function summary(ask: Ask, max = WIDTH): string {
   const b = ask.body;
   const head = b.kind === 'pay' ? `PAY ${b.fields.amount} ${b.fields.currency} at ` : 'CREATE AN ACCOUNT at ';
   const url = new URL(b.kind === 'pay' ? b.fields.checkout_url : b.fields.provider_url);
-  return head + hostTail(url.host, WIDTH - head.length);
+  return head + hostTail(url.host, max - head.length);
 }
 
 export function recap(ask: Ask, now: number): string {
@@ -80,12 +94,14 @@ export function recap(ask: Ask, now: number): string {
   // URLs are stored as the browser resolves them (src/rules.ts): href and host are printable ASCII.
   if (b.kind === 'pay') {
     const url = new URL(b.fields.checkout_url);
-    lines.push(...field('to', safe(b.fields.merchant)), ...field('card', b.fields.card_handle), ...field('site', hostTail(url.host, WIDTH)), ...field('checkout', url.href));
+    lines.push(...field('to', safe(b.fields.merchant), MAX_ROWS.merchant), ...field('card', b.fields.card_handle), ...field('site', hostTail(url.host, WIDTH)), ...field('checkout', url.href, MAX_ROWS.url));
   } else {
     const url = new URL(b.fields.provider_url);
-    lines.push(...field('site', hostTail(url.host, WIDTH)), ...field('signup', url.href), ...field('identity', b.fields.identity_handle ?? 'primary'));
+    lines.push(...field('site', hostTail(url.host, WIDTH)), ...field('signup', url.href, MAX_ROWS.url), ...field('identity', b.fields.identity_handle ?? 'primary'));
   }
-  if (b.fields.reason) lines.push(...field('reason', `(from the agent, unchecked) ${safe(b.fields.reason)}`));
-  lines.push(...field('expires', `in ${minutes} min`), `  approve ${ask.id}   or   deny ${ask.id}`);
+  if (b.fields.reason) lines.push(...field('reason', `(from the agent, unchecked) ${safe(b.fields.reason)}`, MAX_ROWS.reason));
+  // The approver's own words close the recap, next to the approve line: agent text above cannot be the last
+  // thing the person reads before deciding.
+  lines.push(...field('expires', `in ${minutes} min`), ...field('approving', summary(ask)), `  approve ${ask.id}   or   deny ${ask.id}`);
   return lines.join('\n');
 }
