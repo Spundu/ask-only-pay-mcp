@@ -1,0 +1,66 @@
+{
+  "name": "ask-only-pay-mcp",
+  "version": "0.1.0",
+  "private": false,
+  "description": "MCP server that lets an AI agent ask for a payment or an account signup, but never do it. A separate approver shows a person its own recap over mTLS; the agent only sees an id and a state.",
+  "license": "MIT",
+  "author": "Davide Pistone Celestino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Spundu/ask-only-pay-mcp.git"
+  },
+  "homepage": "https://github.com/Spundu/ask-only-pay-mcp#readme",
+  "bugs": "https://github.com/Spundu/ask-only-pay-mcp/issues",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "payments",
+    "human-in-the-loop",
+    "approval",
+    "mtls",
+    "ai-agents",
+    "claude"
+  ],
+  "mcpName": "io.github.Spundu/ask-only-pay-mcp",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "bin": {
+    "ask-only-pay-mcp": "dist/index.js",
+    "ask-only-pay-approver": "dist/approver/main.js",
+    "ask-only-pay-certs": "scripts/certs.mjs"
+  },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/**/*.js",
+    "scripts/certs.mjs",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "lint": "eslint src test scripts",
+    "test": "vitest run",
+    "certs": "node scripts/certs.mjs",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prepare": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/client": "^2.3.1",
+    "@types/node": "^24.19.2",
+    "eslint": "^10.13.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.0",
+    "vitest": "^5.0.5"
+  }
+}

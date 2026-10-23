@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# test / coverage
+coverage/
+
+# environment, certificates and keys — never commit
+.env
+.env.*
+*.pem
+*.key
+certs/
+
+# editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# logs
+npm-debug.log*
+
+# npm pack output
+*.tgz
+pack.json

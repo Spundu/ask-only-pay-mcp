@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: ['22.x', '24.x']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      # `npm ci` installs exactly the lockfile and runs the `prepare` hook, which builds dist/.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # Writes fresh certificates with openssl, then runs the unit, mTLS and end-to-end tests.
+      - name: Test
+        run: npm test
+
+  package:
+    name: Package contents and consumer smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # An ALLOWLIST: the built JavaScript, the certificate script, the licence, the README and package.json.
+      - name: Verify package contents
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e "
+            const files = require('./pack.json')[0].files.map((f) => f.path);
+            const need = ['dist/index.js', 'dist/approver/main.js', 'scripts/certs.mjs', 'LICENSE', 'README.md', 'package.json'];
+            const missing = need.filter((p) => !files.includes(p));
+            const allowed = (p) => /^dist\/(?:approver\/)?[a-z]+\.js$/.test(p) || ['scripts/certs.mjs', 'LICENSE', 'README.md', 'package.json'].includes(p);
+            const stray = files.filter((p) => !allowed(p));
+            if (missing.length || stray.length) { console.error({ missing, stray }); process.exit(1); }
+            console.log(files.length + ' files, all allowed');
+          "
+
+      # Installs the PACKED tarball into an empty project and runs a whole ask, approval and status with it.
+      - name: Consumer smoke test of the packed tarball
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          mkdir "$RUNNER_TEMP/consumer"
+          cd "$RUNNER_TEMP/consumer"
+          npm init -y > /dev/null
+          npm install "$RUNNER_TEMP"/ask-only-pay-mcp-*.tgz @modelcontextprotocol/client@2.3.1
+          cp "$GITHUB_WORKSPACE/scripts/consumer-smoke.mjs" .
+          node consumer-smoke.mjs
