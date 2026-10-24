@@ -43,27 +43,27 @@ The recap also defends the person against text the agent wrote:
 - **No look-alike sites.** The site is shown in punycode, so `shop.exаmple` with a Cyrillic `а` shows as
   `xn--…`. A host too long for one line is shown by its end (`....evil.com`), which names who owns it.
 
-## Quick start (from a clone)
+## Quick start
 
-Needs Node.js 22.12 or later, and `openssl` for the certificates.
+Needs Node.js 22.12 or later, and `openssl` for the certificates. The package is
+[on npm](https://www.npmjs.com/package/ask-only-pay-mcp) and has three commands: `ask-only-pay-mcp` (the MCP
+server), `ask-only-pay-approver` and `ask-only-pay-certs`.
 
 ```bash
-git clone https://github.com/Spundu/ask-only-pay-mcp.git
-cd ask-only-pay-mcp
-npm ci                      # also builds dist/
-npm run certs -- certs      # two separate CAs and two certificates, in ./certs (git-ignored)
+mkdir ask-only-pay && cd ask-only-pay
+npx -y -p ask-only-pay-mcp ask-only-pay-certs certs   # two separate CAs and two certificates, in ./certs
 ```
 
-**1. Start the approver** in a terminal of its own:
+**1. Start the approver** in a terminal of its own, in the same folder:
 
 ```bash
 ASK_ONLY_PAY_APPROVER_CERT=certs/approver.pem \
 ASK_ONLY_PAY_APPROVER_KEY=certs/approver.key \
 ASK_ONLY_PAY_APPROVER_CA=certs/client-ca.pem \
-node dist/approver/main.js
+npx -y -p ask-only-pay-mcp ask-only-pay-approver
 ```
 
-**2. Add the MCP server** to Claude Code (from the clone's folder):
+**2. Add the MCP server** to Claude Code (from the same folder):
 
 ```bash
 claude mcp add --transport stdio ask-only-pay \
@@ -71,7 +71,7 @@ claude mcp add --transport stdio ask-only-pay \
   -e ASK_ONLY_PAY_CLIENT_CERT="$PWD/certs/client.pem" \
   -e ASK_ONLY_PAY_CLIENT_KEY="$PWD/certs/client.key" \
   -e ASK_ONLY_PAY_CA="$PWD/certs/approver-ca.pem" \
-  -- node "$PWD/dist/index.js"
+  -- npx -y ask-only-pay-mcp
 ```
 
 **3. Ask Claude** to buy something. The approver's terminal shows:
@@ -142,6 +142,9 @@ npm run typecheck
 npm run lint
 npm test            # unit, real mTLS, and end to end with the built programs
 ```
+
+To run the quick start from a clone instead, use `npm run certs -- certs`, `node dist/approver/main.js` and
+`node "$PWD/dist/index.js"` in place of the three `npx` commands.
 
 The end-to-end tests start the built approver and the built MCP server as real processes, connect an MCP
 client, and type `approve` and `deny` on the approver's console, as a person would. The mTLS tests use
